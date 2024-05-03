@@ -13,6 +13,8 @@
 #include "esp_flash.h"
 #include "esp_lcd_touch_cst816s.h"
 #include "driver/i2c.h"
+
+esp_lcd_touch_handle_t tp;
 static SemaphoreHandle_t touch_mux;
 
 static void touch_callback(esp_lcd_touch_handle_t tp)
@@ -29,14 +31,37 @@ void i2c_init(void)
 {
     const i2c_config_t i2c_conf = {
         .mode = I2C_MODE_MASTER,
-        .sda_io_num = 19,
+        .sda_io_num = 6,
         .sda_pullup_en = GPIO_PULLUP_ENABLE,
-        .scl_io_num = 20,
+        .scl_io_num = 7,
         .scl_pullup_en = GPIO_PULLUP_ENABLE,
         .master.clk_speed = 400000
     };
     i2c_param_config(0, &i2c_conf);
     i2c_driver_install(0, i2c_conf.mode, 0, 0, 0);
+}
+
+static void example_touch_task(void *arg)
+{
+    printf("Starting touch task\n");
+    uint32_t task_delay_ms = 500;
+    while (1) {
+        // Read data from the touch controller and store it in RAM memory. It should be called regularly in poll.
+        if (xSemaphoreTake(touch_mux, 0) == pdTRUE) {
+            esp_lcd_touch_read_data(tp); // read only when ISR was triggled
+
+            // Get one X and Y coordinates with strength of touch.
+
+            uint16_t touch_x[1];
+            uint16_t touch_y[1];
+            uint16_t touch_strength[1];
+            uint8_t touch_cnt = 0;
+            bool touchpad_pressed = esp_lcd_touch_get_coordinates(tp, touch_x, touch_y, touch_strength, &touch_cnt, 1);
+            printf("touch pressed = %d , x = %u , y=%u\n", touchpad_pressed, touch_x[0], touch_y[0]);
+        }        
+        
+        vTaskDelay(pdMS_TO_TICKS(task_delay_ms));
+    }
 }
 
 void app_main(void)
@@ -76,11 +101,11 @@ void app_main(void)
 
     esp_lcd_touch_config_t tp_cfg = {
         .x_max = 240,
-        .y_max = 280,
-        .rst_gpio_num = 21,
-        .int_gpio_num = 2,
+        .y_max = 240,
+        .rst_gpio_num = 13,
+        .int_gpio_num = 5,
         .levels = {
-            .reset = 1,
+            .reset = 0,
             .interrupt = 0,
         },
         .flags = {
@@ -91,18 +116,9 @@ void app_main(void)
         .interrupt_callback = touch_callback,
     };
 
-    esp_lcd_touch_handle_t tp;
     esp_lcd_panel_io_handle_t io_handle = NULL;
     esp_lcd_new_panel_io_i2c((esp_lcd_i2c_bus_handle_t)0 , &io_config, &io_handle);
     esp_lcd_touch_new_i2c_cst816s(io_handle, &tp_cfg, &tp);
-    while (1){
-    if (xSemaphoreTake(touch_mux, 0) == pdTRUE) {
-        esp_lcd_touch_read_data(tp); // read only when ISR was triggled
-        uint16_t touch_x[1];
-        uint16_t touch_y[1];
-        uint16_t touch_strength[1];
-        uint8_t touch_cnt = 0;
-        bool touchpad_pressed = esp_lcd_touch_get_coordinates(tp, touch_x, touch_y, touch_strength, &touch_cnt, 1);
-        }
-    }
+
+    xTaskCreate(example_touch_task, "Touch", 4 * 1024, NULL, 3, NULL);
 }
